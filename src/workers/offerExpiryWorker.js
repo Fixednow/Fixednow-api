@@ -289,7 +289,7 @@ async function declineOffer(offerId, providerId, io) {
 
 module.exports = {
   DEFAULT_OFFER_TIMEOUT_SECONDS,
-  PHOTO_CHECK_BONUS_SECONDS,
+  PHOTO_CHECK_BONUS_SECONDS_PER_PHOTO,
   MAX_OFFER_TIMEOUT_SECONDS,
   PARALLEL_PING_COUNT,
   resolveOfferTimeout,
