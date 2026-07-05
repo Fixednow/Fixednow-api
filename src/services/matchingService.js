@@ -132,12 +132,13 @@ async function broadcastJob(jobId, io) {
     const offers = [];
     for (const candidate of candidates) {
       rank += 1;
-      const offerRes = await client.query(
-        `INSERT INTO job_offers
-           (job_id, provider_id, distance_km, broadcast_rank, timeout_seconds, status, expires_at)
-         VALUES ($1, $2, $3, $4, $5, 'pending', now() + make_interval(secs => $5))
-         RETURNING *`,
-        [jobId, candidate.provider_id, candidate.distance_km, rank, timeoutSeconds]
+     const offerRes = await client.query(
+     `INSERT INTO job_offers
+        (job_id, provider_id, distance_km, broadcast_rank, timeout_seconds, status, expires_at)
+      VALUES ($1, $2, $3, $4, $5, 'pending', now() + make_interval(secs => $6))
+      RETURNING *`,
+     [jobId, candidate.provider_id, candidate.distance_km, rank, timeoutSeconds, timeoutSeconds]
+   );
       );
       offers.push(offerRes.rows[0]);
     }
