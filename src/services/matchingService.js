@@ -139,7 +139,6 @@ async function broadcastJob(jobId, io) {
       RETURNING *`,
      [jobId, candidate.provider_id, candidate.distance_km, rank, timeoutSeconds, timeoutSeconds]
    );
-      );
       offers.push(offerRes.rows[0]);
     }
 
