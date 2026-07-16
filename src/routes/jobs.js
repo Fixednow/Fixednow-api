@@ -1,25 +1,32 @@
+
+Jobs · JS
 const express = require('express');
 const pool = require('../db/pool');
 const { broadcastJob, acceptOffer, declineOffer } = require('../services/matchingService');
-
+const { requireAuth } = require('../middleware/auth');
+ 
 function jobsRouter(io) {
   const router = express.Router();
-
+ 
   // Customer submits a new job request (on-demand or scheduled).
+  // customerId now comes from the verified auth token, not the request
+  // body — a customer can only ever create jobs as themselves.
+  //
   // photoUrls: reference images (tyre sidewall, appliance model plate,
   // damaged part) — presence of these extends the provider's response
   // window since they may need to check stock/compatibility first.
   // photosPublic: optional override for whether this job's completion
   // photos should appear on the provider's public portfolio. Defaults to
   // the category's `portfolio_category` setting if not specified.
-  router.post('/', async (req, res) => {
-    const { customerId, categoryId, lng, lat, addressText, description,
+  router.post('/', requireAuth('customer'), async (req, res) => {
+    const customerId = req.user.id;
+    const { categoryId, lng, lat, addressText, description,
             urgencyLevel, scheduledFor, photoUrls, photosPublic } = req.body;
-
-    if (!customerId || !categoryId || lng === undefined || lat === undefined) {
-      return res.status(400).json({ error: 'customerId, categoryId, lng, lat are required' });
+ 
+    if (!categoryId || lng === undefined || lat === undefined) {
+      return res.status(400).json({ error: 'categoryId, lng, lat are required' });
     }
-
+ 
     try {
       const categoryRes = await pool.query(
         `SELECT flow_type, offer_timeout_seconds, portfolio_category FROM service_categories WHERE id = $1`,
@@ -30,7 +37,7 @@ function jobsRouter(io) {
       }
       const { flow_type, portfolio_category } = categoryRes.rows[0];
       const completionPhotosPublic = typeof photosPublic === 'boolean' ? photosPublic : portfolio_category;
-
+ 
       const jobRes = await pool.query(
         `INSERT INTO jobs
            (customer_id, category_id, flow_type, service_location, address_text,
@@ -41,11 +48,11 @@ function jobsRouter(io) {
          urgencyLevel || 'standard', scheduledFor || null, photoUrls || null, completionPhotosPublic]
       );
       const job = jobRes.rows[0];
-
+ 
       // On-demand jobs broadcast immediately. Scheduled jobs could be queued
       // for a later broadcast window — kept simple here and broadcast now too.
       const offers = await broadcastJob(job.id, io);
-
+ 
       res.status(201).json({
         job,
         pingedProviders: offers.map((o) => ({
@@ -60,13 +67,14 @@ function jobsRouter(io) {
       res.status(500).json({ error: 'Failed to create job' });
     }
   });
-
-  // Provider accepts a specific offer
-  router.post('/:jobId/offers/:offerId/accept', async (req, res) => {
+ 
+  // Provider accepts a specific offer. providerId comes from the verified
+  // token — combined with acceptOffer()'s own "WHERE provider_id = $2"
+  // check, a provider can only ever accept offers actually sent to them.
+  router.post('/:jobId/offers/:offerId/accept', requireAuth('provider'), async (req, res) => {
     const { offerId } = req.params;
-    const { providerId } = req.body;
-    if (!providerId) return res.status(400).json({ error: 'providerId is required' });
-
+    const providerId = req.user.id;
+ 
     try {
       const offer = await acceptOffer(offerId, providerId, io);
       res.json({ offer });
@@ -74,13 +82,12 @@ function jobsRouter(io) {
       res.status(409).json({ error: err.message });
     }
   });
-
+ 
   // Provider declines — cascades to next-closest automatically
-  router.post('/:jobId/offers/:offerId/decline', async (req, res) => {
+  router.post('/:jobId/offers/:offerId/decline', requireAuth('provider'), async (req, res) => {
     const { offerId } = req.params;
-    const { providerId } = req.body;
-    if (!providerId) return res.status(400).json({ error: 'providerId is required' });
-
+    const providerId = req.user.id;
+ 
     try {
       // Empty array means the rest of this round is still pending —
       // the next round only fires once every sibling offer has resolved.
@@ -90,21 +97,22 @@ function jobsRouter(io) {
       res.status(409).json({ error: err.message });
     }
   });
-
+ 
   // Provider advances the job through non-terminal stages (en_route,
   // arrived, in_progress). Completion is handled separately below since
   // it may require proof-of-work photos.
   const ADVANCEABLE_STATUSES = ['en_route', 'arrived', 'in_progress'];
-  router.post('/:jobId/status', async (req, res) => {
+  router.post('/:jobId/status', requireAuth('provider'), async (req, res) => {
     const { jobId } = req.params;
-    const { providerId, status } = req.body;
-    if (!providerId || !status) {
-      return res.status(400).json({ error: 'providerId and status are required' });
+    const providerId = req.user.id;
+    const { status } = req.body;
+    if (!status) {
+      return res.status(400).json({ error: 'status is required' });
     }
     if (!ADVANCEABLE_STATUSES.includes(status)) {
       return res.status(400).json({ error: `status must be one of: ${ADVANCEABLE_STATUSES.join(', ')}` });
     }
-
+ 
     try {
       const { rows } = await pool.query(
         `UPDATE jobs SET status = $1
@@ -116,7 +124,7 @@ function jobsRouter(io) {
         return res.status(404).json({ error: 'Job not found or not assigned to this provider' });
       }
       const job = rows[0];
-
+ 
       if (io) {
         io.to(`customer:${job.customer_id}`).emit('job:statusUpdate', { jobId, status });
       }
@@ -126,16 +134,16 @@ function jobsRouter(io) {
       res.status(500).json({ error: 'Failed to update job status' });
     }
   });
-
+ 
   // Provider marks the job complete. If the category requires proof of
   // work, at least one completion photo is mandatory — this is enforced
   // server-side, not just in the app UI, since that's the only place it
   // actually protects the customer/provider in a dispute.
-  router.post('/:jobId/complete', async (req, res) => {
+  router.post('/:jobId/complete', requireAuth('provider'), async (req, res) => {
     const { jobId } = req.params;
-    const { providerId, photoUrls } = req.body;
-    if (!providerId) return res.status(400).json({ error: 'providerId is required' });
-
+    const providerId = req.user.id;
+    const { photoUrls } = req.body;
+ 
     try {
       const jobRes = await pool.query(
         `SELECT j.id, j.customer_id, j.accepted_provider_id, sc.requires_completion_photo
@@ -146,7 +154,7 @@ function jobsRouter(io) {
       );
       if (jobRes.rows.length === 0) return res.status(404).json({ error: 'Job not found' });
       const job = jobRes.rows[0];
-
+ 
       if (job.accepted_provider_id !== providerId) {
         return res.status(403).json({ error: 'Job is not assigned to this provider' });
       }
@@ -155,7 +163,7 @@ function jobsRouter(io) {
           error: 'This job requires at least one photo of the completed work before it can be marked complete',
         });
       }
-
+ 
       const { rows } = await pool.query(
         `UPDATE jobs
          SET status = 'completed', completed_at = now(), completion_photo_urls = $1
@@ -164,38 +172,39 @@ function jobsRouter(io) {
         [photoUrls || null, jobId]
       );
       const updatedJob = rows[0];
-
+ 
       if (io) {
         io.to(`customer:${job.customer_id}`).emit('job:completed', {
           jobId,
           completionPhotoUrls: updatedJob.completion_photo_urls,
         });
       }
-
+ 
       res.json({ job: updatedJob });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Failed to complete job' });
     }
   });
-
+ 
   // Customer rates a completed job. This is the only writer of
   // providers.rating_avg/rating_count — rolled into the running average
   // rather than recomputed from scratch each time.
-  router.post('/:jobId/review', async (req, res) => {
+  router.post('/:jobId/review', requireAuth('customer'), async (req, res) => {
     const { jobId } = req.params;
-    const { customerId, rating, comment } = req.body;
-    if (!customerId || rating === undefined) {
-      return res.status(400).json({ error: 'customerId and rating are required' });
+    const customerId = req.user.id;
+    const { rating, comment } = req.body;
+    if (rating === undefined) {
+      return res.status(400).json({ error: 'rating is required' });
     }
     if (rating < 1 || rating > 5) {
       return res.status(400).json({ error: 'rating must be between 1 and 5' });
     }
-
+ 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-
+ 
       const jobRes = await client.query(
         `SELECT id, customer_id, accepted_provider_id, status FROM jobs WHERE id = $1 FOR UPDATE`,
         [jobId]
@@ -205,7 +214,7 @@ function jobsRouter(io) {
         return res.status(404).json({ error: 'Job not found' });
       }
       const job = jobRes.rows[0];
-
+ 
       if (job.customer_id !== customerId) {
         await client.query('ROLLBACK');
         return res.status(403).json({ error: 'This job does not belong to this customer' });
@@ -214,7 +223,7 @@ function jobsRouter(io) {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: 'Job must be completed before it can be reviewed' });
       }
-
+ 
       const reviewRes = await client.query(
         `INSERT INTO reviews (job_id, customer_id, provider_id, rating, comment)
          VALUES ($1, $2, $3, $4, $5)
@@ -222,7 +231,7 @@ function jobsRouter(io) {
          RETURNING *`,
         [jobId, customerId, job.accepted_provider_id, rating, comment || null]
       );
-
+ 
       await client.query(
         `UPDATE providers
          SET rating_count = rating_count + 1,
@@ -230,7 +239,7 @@ function jobsRouter(io) {
          WHERE id = $2`,
         [rating, job.accepted_provider_id]
       );
-
+ 
       await client.query('COMMIT');
       res.status(201).json({ review: reviewRes.rows[0] });
     } catch (err) {
@@ -241,15 +250,26 @@ function jobsRouter(io) {
       client.release();
     }
   });
-
-  // Poll job status (customer-side fallback if not using sockets)
-  router.get('/:jobId', async (req, res) => {
+ 
+  // Poll job status. Requires auth, and only the job's own customer or
+  // assigned provider may view it — this endpoint returns the address and
+  // any attached photos, which shouldn't be visible to just anyone who
+  // guesses a job ID.
+  router.get('/:jobId', requireAuth(), async (req, res) => {
     const { rows } = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.jobId]);
     if (rows.length === 0) return res.status(404).json({ error: 'Job not found' });
-    res.json(rows[0]);
+    const job = rows[0];
+    const isOwner = req.user.id === job.customer_id || req.user.id === job.accepted_provider_id;
+    if (!isOwner) {
+      return res.status(403).json({ error: 'You do not have access to this job' });
+    }
+    res.json(job);
   });
-
+ 
   return router;
 }
-
+ 
 module.exports = jobsRouter;
+ 
+
+
