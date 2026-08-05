@@ -1,5 +1,5 @@
 
-Auth · JS
+
 const express = require('express');
 const pool = require('../db/pool');
 const { hashPassword, verifyPassword, signToken } = require('../utils/auth');
