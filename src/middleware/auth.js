@@ -1,5 +1,5 @@
 
-Auth · JS
+
 const { verifyToken } = require('../utils/auth');
  
 const JWT_SECRET = process.env.JWT_SECRET || 'insecure-dev-secret-do-not-use-in-production';
