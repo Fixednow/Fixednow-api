@@ -1,5 +1,5 @@
 
-Websocket · JS
+
 const { Server } = require('socket.io');
 const pool = require('./db/pool');
 const { verifyToken } = require('./utils/auth');
