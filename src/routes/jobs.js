@@ -1,5 +1,5 @@
 
-Jobs · JS
+
 const express = require('express');
 const pool = require('../db/pool');
 const { broadcastJob, acceptOffer, declineOffer } = require('../services/matchingService');
