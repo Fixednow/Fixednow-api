@@ -1,7 +1,8 @@
 
-
+Providers · JS
 const express = require('express');
 const pool = require('../db/pool');
+const { requireAuth } = require('../middleware/auth');
  
 // The "weight" given to the platform-wide average in the Bayesian rating
 // formula — effectively how many reviews of average quality a provider
@@ -188,8 +189,98 @@ function providersRouter() {
     }
   });
  
+  // ---- Authenticated: a provider managing their own service offerings ----
+  // These are what actually let a newly signed-up provider do anything —
+  // without a row in provider_services, a provider is invisible to both
+  // the urgent-flow broadcast and the Book-ahead browse list, however
+  // "online" they are.
+ 
+  // List the categories this provider currently offers.
+  router.get('/me/services', requireAuth('provider'), async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT ps.id, ps.category_id, sc.name AS category_name,
+                ps.service_radius_km, ps.flat_rate, ps.is_active,
+                ps.verification_status
+         FROM provider_services ps
+         JOIN service_categories sc ON sc.id = ps.category_id
+         WHERE ps.provider_id = $1
+         ORDER BY sc.name`,
+        [req.user.id]
+      );
+      res.json({ services: rows });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to load your services' });
+    }
+  });
+ 
+  // Add or update one category this provider offers. Upserts on
+  // (provider_id, category_id) — calling this again for a category you
+  // already offer just updates the radius/rate rather than erroring.
+  router.post('/me/services', requireAuth('provider'), async (req, res) => {
+    const { categoryId, serviceRadiusKm, flatRate } = req.body;
+    if (!categoryId) {
+      return res.status(400).json({ error: 'categoryId is required' });
+    }
+ 
+    try {
+      const categoryRes = await pool.query(
+        `SELECT default_service_radius_km, requires_regulation FROM service_categories WHERE id = $1`,
+        [categoryId]
+      );
+      if (categoryRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Unknown category' });
+      }
+      const { default_service_radius_km, requires_regulation } = categoryRes.rows[0];
+ 
+      // Regulated trades (Plumber, Electrician) start out needing document
+      // verification rather than going straight to bookable — everyone
+      // else can start receiving jobs immediately.
+      const verificationStatus = requires_regulation ? 'pending' : 'not_required';
+ 
+      const { rows } = await pool.query(
+        `INSERT INTO provider_services (provider_id, category_id, service_radius_km, flat_rate, verification_status)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (provider_id, category_id) DO UPDATE
+           SET service_radius_km = EXCLUDED.service_radius_km,
+               flat_rate = EXCLUDED.flat_rate,
+               is_active = true
+         RETURNING id, category_id, service_radius_km, flat_rate, is_active, verification_status`,
+        [req.user.id, categoryId, serviceRadiusKm || default_service_radius_km, flatRate || null, verificationStatus]
+      );
+      res.status(201).json({ service: rows[0] });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to add service' });
+    }
+  });
+ 
+  // Stop offering a category. Soft-deletes (is_active = false) rather than
+  // deleting the row outright, so past jobs/reviews under that category
+  // keep a valid reference to it.
+  router.delete('/me/services/:categoryId', requireAuth('provider'), async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `UPDATE provider_services SET is_active = false
+         WHERE provider_id = $1 AND category_id = $2
+         RETURNING id`,
+        [req.user.id, req.params.categoryId]
+      );
+      if (rows.length === 0) {
+        return res.status(404).json({ error: "You don't offer this category" });
+      }
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to remove service' });
+    }
+  });
+ 
   return router;
 }
  
 module.exports = providersRouter;
  
+
+
