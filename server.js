@@ -46,5 +46,5 @@ startOfferExpiryWorker(io);
 
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => {
-  console.log(`FixedNow matching API listening on port ${PORT}`);
+  console.log(`Send the Pros matching API listening on port ${PORT}`);
 });

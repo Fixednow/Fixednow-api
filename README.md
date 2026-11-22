@@ -1,4 +1,4 @@
-# FixedNow Matching API
+# Send the Pros Matching API
 
 Implements the geo-matching + broadcast cascade from the plan: nearest-provider
 lookup, ping-with-countdown, decline-cascades-to-next, and real-time location

@@ -118,7 +118,7 @@ function providersRouter() {
       res.json({ providers: rows });
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Failed to load providers' });
+      res.status(500).json({ error: 'Failed to load pros' });
     }
   });
 
@@ -142,7 +142,7 @@ function providersRouter() {
         [providerId]
       );
       if (providerRes.rows.length === 0) {
-        return res.status(404).json({ error: 'Provider not found' });
+        return res.status(404).json({ error: 'Pro not found' });
       }
 
       const params = [providerId];
@@ -184,7 +184,7 @@ function providersRouter() {
       });
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Failed to load provider portfolio' });
+      res.status(500).json({ error: 'Failed to load portfolio' });
     }
   });
 

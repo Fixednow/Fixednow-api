@@ -1,7 +1,7 @@
 {
   "name": "fixednow-matching-api",
   "version": "1.0.0",
-  "description": "FixedNow matching engine: job broadcast, geo-matching, offer cascade",
+  "description": "Send the Pros matching engine: job broadcast, geo-matching, offer cascade",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
